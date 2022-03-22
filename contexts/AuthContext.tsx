@@ -1,23 +1,91 @@
-import { createContext, useState, ReactNode, useContext } from 'react';
-import { api } from '../services/api';
+import {
+	createContext,
+	ReactNode,
+	useContext,
+	useEffect,
+	useState,
+} from 'react';
+import { setCookie, parseCookies, destroyCookie } from 'nookies';
+import Router from 'next/router';
 
-type SignInCredentials = {
+import { api } from '../services/apiClient';
+
+interface User {
+	email: string;
+	permissions: string[];
+	roles: string[];
+}
+
+interface SignInCredentials {
 	email: string;
 	password: string;
-};
+}
 
-type AuthContextData = {
-	signIn(credentials: SignInCredentials): Promise<void>;
+interface AuthContextData {
 	isAuthenticated: boolean;
-};
+	user?: User;
+	signIn: (credentials: SignInCredentials) => Promise<void>;
+	signOut: () => void;
+}
 
 interface AuthProviderProps {
 	children: ReactNode;
 }
-const AuthContext = createContext({} as AuthContextData);
+
+let authChannel: BroadcastChannel;
+
+export function signOut() {
+	destroyCookie(undefined, 'next-auth.token');
+	destroyCookie(undefined, 'nextauth.refreshToken');
+
+	authChannel.postMessage('signOut');
+
+	Router.push('/');
+}
+
+export const AuthContext = createContext({} as AuthContextData);
 
 export function AuthProvider({ children }: AuthProviderProps) {
-	const [isAuthenticated, setIsAuthenticated] = useState(false);
+	const [user, setUser] = useState<User>();
+	const isAuthenticated = !!user;
+
+	useEffect(() => {
+		authChannel = new BroadcastChannel('auth');
+
+		authChannel.onmessage = (message) => {
+			switch (message.data) {
+				case 'signOut':
+					signOut();
+
+					authChannel.close();
+
+					break;
+				case 'signIn':
+					window.location.replace('/dashboard');
+
+					break;
+				default:
+					break;
+			}
+		};
+	}, []);
+
+	useEffect(() => {
+		const { 'next-auth.token': token } = parseCookies();
+
+		if (token) {
+			api
+				.get('/me')
+				.then((response) => {
+					const { email, permissions, roles } = response.data;
+
+					setUser({ email, permissions, roles });
+				})
+				.catch(() => {
+					signOut();
+				});
+		}
+	}, []);
 
 	async function signIn({ email, password }: SignInCredentials) {
 		try {
@@ -25,19 +93,48 @@ export function AuthProvider({ children }: AuthProviderProps) {
 				email,
 				password,
 			});
-			console.log(response);
-		} catch (error) {
-			console.log(error);
+
+			const { token, refreshToken, permissions, roles } = response.data;
+
+			setCookie(undefined, 'next-auth.token', token, {
+				maxAge: 60 * 60 * 24 * 30, // 30 days
+				path: '/',
+			});
+
+			setCookie(undefined, 'nextauth.refreshToken', refreshToken, {
+				maxAge: 60 * 60 * 24 * 30, // 30 days
+				path: '/',
+			});
+
+			setUser({
+				email,
+				permissions,
+				roles,
+			});
+
+			api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+
+			Router.push('/dashboard');
+
+			authChannel.postMessage('signIn');
+		} catch (err) {
+			console.log(err);
 		}
 	}
+
 	return (
-		<AuthContext.Provider value={{ signIn, isAuthenticated }}>
+		<AuthContext.Provider
+			value={{
+				isAuthenticated,
+				user,
+				signIn,
+				signOut,
+			}}>
 			{children}
 		</AuthContext.Provider>
 	);
 }
-
 export function useAuthContext() {
-	const { isAuthenticated, signIn } = useContext(AuthContext);
-	return { isAuthenticated, signIn };
+	const { isAuthenticated, signIn, user } = useContext(AuthContext);
+	return { isAuthenticated, signIn, user };
 }

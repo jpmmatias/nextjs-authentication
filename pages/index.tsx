@@ -2,6 +2,7 @@ import type { NextPage } from 'next';
 import { FormEvent, useState } from 'react';
 import { useAuthContext } from '../contexts/AuthContext';
 import styles from '../styles/Home.module.css';
+import { onlyGuest } from '../utils/onlyGuest';
 
 const Home: NextPage = () => {
 	const [email, setEmail] = useState('');
@@ -39,3 +40,9 @@ const Home: NextPage = () => {
 };
 
 export default Home;
+
+export const getServerSideProps = onlyGuest(async () => {
+	return {
+		props: {},
+	};
+});
